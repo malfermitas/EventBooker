@@ -1,0 +1,36 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: release
+    ports:
+      - "8080:8080"
+    environment:
+      CONFIG_PATH: /app/configs/config.yaml
+      POSTGRES_DSN: postgres://postgres:postgres@db:5432/eventbooker?sslmode=disable
+      HTTP_ADDR: :8080
+      APP_ENV: docker
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: eventbooker
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/schema/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d eventbooker"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:

@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EventBooker</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">EventBooker</p>
+        <h1>Book events, manage sessions, and connect Telegram alerts in one place.</h1>
+        <p class="hero-text">Use the dashboard to register, sign in, browse events, and open the Telegram bot with your personal `user_id` link when your account is ready.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="#events-panel">Browse events</a>
+          <a class="button button-secondary" id="telegram-link" href="#" target="_blank" rel="noreferrer">Open Telegram bot</a>
+        </div>
+        <p class="hero-hint" id="telegram-hint">Sign in first to open the bot with your personal `/start &lt;user_id&gt;` link.</p>
+      </div>
+      <div class="hero-card status-card">
+        <div class="status-row">
+          <span>API</span>
+          <strong>Live</strong>
+        </div>
+        <div class="status-row">
+          <span>User</span>
+          <strong id="current-user-name">Guest</strong>
+        </div>
+        <div class="status-row">
+          <span>Telegram</span>
+          <strong id="telegram-status">Not linked yet</strong>
+        </div>
+      </div>
+    </header>
+
+    <main class="dashboard-grid">
+      <section class="panel auth-panel">
+        <div class="panel-head">
+          <h2>Account</h2>
+          <button class="button button-ghost hidden" id="logout-button" type="button">Log out</button>
+        </div>
+
+        <div class="forms-grid">
+          <form id="register-form" class="card form-card">
+            <h3>Create account</h3>
+            <label>
+              <span>Name</span>
+              <input type="text" name="name" placeholder="Andrey" required>
+            </label>
+            <label>
+              <span>Email</span>
+              <input type="email" name="email" placeholder="you@example.com" required>
+            </label>
+            <label>
+              <span>Password</span>
+              <input type="password" name="password" placeholder="At least 8 chars" required minlength="8">
+            </label>
+            <button class="button button-primary" type="submit">Register</button>
+          </form>
+
+          <form id="login-form" class="card form-card">
+            <h3>Sign in</h3>
+            <label>
+              <span>Email</span>
+              <input type="email" name="email" placeholder="you@example.com" required>
+            </label>
+            <label>
+              <span>Password</span>
+              <input type="password" name="password" placeholder="Your password" required>
+            </label>
+            <button class="button button-primary" type="submit">Log in</button>
+          </form>
+        </div>
+
+        <div class="card identity-card">
+          <h3>Your profile</h3>
+          <dl id="profile-details" class="profile-grid">
+            <div><dt>ID</dt><dd>-</dd></div>
+            <div><dt>Name</dt><dd>-</dd></div>
+            <div><dt>Email</dt><dd>-</dd></div>
+            <div><dt>Role</dt><dd>-</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="panel events-panel" id="events-panel">
+        <div class="panel-head">
+          <h2>Events</h2>
+          <button class="button button-secondary" id="refresh-events-button" type="button">Refresh</button>
+        </div>
+        <div id="events-list" class="event-list"></div>
+      </section>
+
+      <section class="panel details-panel">
+        <div class="panel-head">
+          <h2>Event details</h2>
+        </div>
+        <div id="event-details" class="card details-card empty-state">Select an event to see capacity, bookings, and actions.</div>
+      </section>
+
+      <section class="panel create-panel">
+        <div class="panel-head">
+          <h2>Create event</h2>
+        </div>
+        <form id="create-event-form" class="card form-card">
+          <label>
+            <span>Title</span>
+            <input type="text" name="title" placeholder="Spring Meetup" required>
+          </label>
+          <label>
+            <span>Start at</span>
+            <input type="datetime-local" name="start_at" required>
+          </label>
+          <label>
+            <span>Capacity</span>
+            <input type="number" name="capacity" min="1" value="30" required>
+          </label>
+          <label>
+            <span>Booking TTL seconds</span>
+            <input type="number" name="booking_ttl_seconds" min="1" value="900" required>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" name="requires_payment" checked>
+            <span>Requires payment confirmation</span>
+          </label>
+          <button class="button button-primary" type="submit">Create event</button>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <aside id="toast" class="toast hidden"></aside>
+
+  <script>
+    window.EVENTBOOKER_CONFIG = {
+      telegramBotUsername: {{ printf "%q" .TelegramBotUsername }}
+    };
+  </script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

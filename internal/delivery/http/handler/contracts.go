@@ -9,3 +9,11 @@ type EventHandler interface {
 	ConfirmBooking(ctx *ginext.Context)
 	GetEvent(ctx *ginext.Context)
 }
+
+type AuthHandler interface {
+	Register(ctx *ginext.Context)
+	Login(ctx *ginext.Context)
+	Refresh(ctx *ginext.Context)
+	Logout(ctx *ginext.Context)
+	Me(ctx *ginext.Context)
+}

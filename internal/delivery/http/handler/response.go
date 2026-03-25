@@ -35,6 +35,21 @@ type eventDetailsResponse struct {
 	Bookings       []bookingResponse `json:"bookings"`
 }
 
+type userResponse struct {
+	ID        int64          `json:"id"`
+	Email     string         `json:"email"`
+	Name      string         `json:"name"`
+	Role      model.UserRole `json:"role"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+type authResponse struct {
+	AccessToken string       `json:"access_token"`
+	TokenType   string       `json:"token_type"`
+	ExpiresIn   int64        `json:"expires_in"`
+	User        userResponse `json:"user"`
+}
+
 func eventResponsesFromModels(events []*model.Event) []eventResponse {
 	response := make([]eventResponse, 0, len(events))
 	for _, event := range events {
@@ -42,6 +57,26 @@ func eventResponsesFromModels(events []*model.Event) []eventResponse {
 	}
 
 	return response
+}
+
+func userResponseFromModel(user *model.User) userResponse {
+	return userResponse{
+		ID:        user.ID,
+		Email:     user.Email,
+		Name:      user.Name,
+		Role:      user.Role,
+		CreatedAt: user.CreatedAt,
+	}
+
+}
+
+func authResponseFromResult(tokens *service.AuthTokens, user *model.User) authResponse {
+	return authResponse{
+		AccessToken: tokens.AccessToken,
+		TokenType:   tokens.TokenType,
+		ExpiresIn:   tokens.ExpiresIn,
+		User:        userResponseFromModel(user),
+	}
 }
 
 // eventResponseFromModel converts domain event model to HTTP response DTO.

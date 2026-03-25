@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"eventbooker/internal/delivery/http/middleware"
 	"eventbooker/internal/service"
 	"net/http"
 	"strconv"
@@ -26,10 +27,6 @@ type createEventRequest struct {
 	Capacity          int    `json:"capacity" binding:"required,gte=1"`
 	BookingTTLSeconds int    `json:"booking_ttl_seconds" binding:"required,gte=1"`
 	RequiresPayment   *bool  `json:"requires_payment"`
-}
-
-type bookingActionRequest struct {
-	UserID int64 `json:"user_id" binding:"required,gt=0"`
 }
 
 // CreateEvent handles POST /events and returns created event JSON with HTTP 201.
@@ -82,8 +79,14 @@ func (h eventHandler) ListEvents(ctx *ginext.Context) {
 // BookEvent handles POST /events/:id/book and returns booking JSON with HTTP 201.
 // Returns HTTP 400 for invalid path/body input and HTTP 500 for service errors.
 func (h eventHandler) BookEvent(ctx *ginext.Context) {
-	eventID, userID, ok := parseBookingActionInput(ctx)
+	eventID, ok := parseEventID(ctx)
 	if !ok {
+		return
+	}
+
+	userID, ok := currentUserID(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": service.ErrUnauthorized.Error()})
 		return
 	}
 
@@ -102,8 +105,14 @@ func (h eventHandler) BookEvent(ctx *ginext.Context) {
 // ConfirmBooking handles POST /events/:id/confirm and returns booking JSON with HTTP 200.
 // Returns HTTP 400 for invalid path/body input and HTTP 500 for service errors.
 func (h eventHandler) ConfirmBooking(ctx *ginext.Context) {
-	eventID, userID, ok := parseBookingActionInput(ctx)
+	eventID, ok := parseEventID(ctx)
 	if !ok {
+		return
+	}
+
+	userID, ok := currentUserID(ctx)
+	if !ok {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": service.ErrUnauthorized.Error()})
 		return
 	}
 
@@ -149,30 +158,27 @@ func parseEventID(ctx *ginext.Context) (int64, bool) {
 	return eventID, true
 }
 
-// parseBookingActionInput parses event ID and booking action body.
-// Returns (eventID, userID, true) on success, otherwise (0, 0, false) and HTTP 400.
-func parseBookingActionInput(ctx *ginext.Context) (int64, int64, bool) {
-	eventID, ok := parseEventID(ctx)
+func currentUserID(ctx *ginext.Context) (int64, bool) {
+	value, ok := ctx.Get(middleware.CurrentUserIDKey)
 	if !ok {
-		return 0, 0, false
+		return 0, false
 	}
 
-	var req bookingActionRequest
-	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return 0, 0, false
-	}
-
-	return eventID, req.UserID, true
+	userID, ok := value.(int64)
+	return userID, ok
 }
 
 func writeServiceError(ctx *ginext.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrInvalidInput):
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrUnauthorized), errors.Is(err, service.ErrInvalidCredentials), errors.Is(err, service.ErrSessionNotFound), errors.Is(err, service.ErrSessionExpired), errors.Is(err, service.ErrSessionRevoked):
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrForbidden):
+		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrEventNotFound), errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrBookingNotFound):
 		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
-	case errors.Is(err, service.ErrNoSeatsAvailable), errors.Is(err, service.ErrBookingAlreadyExist), errors.Is(err, service.ErrBookingExpired):
+	case errors.Is(err, service.ErrNoSeatsAvailable), errors.Is(err, service.ErrBookingAlreadyExist), errors.Is(err, service.ErrBookingExpired), errors.Is(err, service.ErrEmailAlreadyExists):
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

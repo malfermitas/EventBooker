@@ -11,6 +11,7 @@ import (
 	appconfig "eventbooker/internal/config"
 	deliveryhttp "eventbooker/internal/delivery/http"
 	"eventbooker/internal/delivery/http/handler"
+	transportmiddleware "eventbooker/internal/delivery/http/middleware"
 	"eventbooker/internal/repository/postgres"
 	"eventbooker/internal/service"
 
@@ -70,6 +71,7 @@ func run() error {
 	userRepository := postgres.NewUserRepository(db)
 	eventRepository := postgres.NewEventRepository(db)
 	bookingRepository := postgres.NewBookingRepository(db)
+	refreshTokenRepository := postgres.NewRefreshTokenRepository(db)
 
 	eventService := service.NewEventService(
 		postgres.NewTxManager(txManager),
@@ -77,9 +79,17 @@ func run() error {
 		eventRepository,
 		bookingRepository,
 	)
+	authService := service.NewAuthService(
+		postgres.NewTxManager(txManager),
+		userRepository,
+		refreshTokenRepository,
+		cfg.Auth,
+	)
 
+	authHandler := handler.NewAuthHandler(authService, cfg.Auth)
 	eventHandler := handler.NewEventHandler(eventService)
-	router := deliveryhttp.NewRouter(eventHandler)
+	authMiddleware := transportmiddleware.NewAuthMiddleware(authService)
+	router := deliveryhttp.NewRouter(authHandler, eventHandler, authMiddleware)
 
 	server := &stdhttp.Server{
 		Addr:         cfg.HTTP.Addr,

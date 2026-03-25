@@ -7,7 +7,7 @@ import (
 
 func scanUser(row pgx.Row) (*model.User, error) {
 	user := &model.User{}
-	err := row.Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.CreatedAt)
+	err := row.Scan(&user.ID, &user.Email, &user.Name, &user.PasswordHash, &user.Role, &user.CreatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -50,4 +50,24 @@ func scanBooking(row pgx.Row) (*model.Booking, error) {
 	}
 
 	return booking, nil
+}
+
+func scanRefreshToken(row pgx.Row) (*model.RefreshToken, error) {
+	token := &model.RefreshToken{}
+	err := row.Scan(
+		&token.ID,
+		&token.UserID,
+		&token.TokenHash,
+		&token.ExpiresAt,
+		&token.CreatedAt,
+		&token.RevokedAt,
+		&token.ReplacedByTokenID,
+		&token.UserAgent,
+		&token.IPAddress,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return token, nil
 }

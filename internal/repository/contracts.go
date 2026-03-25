@@ -18,6 +18,14 @@ type UserRepository interface {
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 }
 
+type RefreshTokenRepository interface {
+	Create(ctx context.Context, token *model.RefreshToken) error
+	GetByTokenHash(ctx context.Context, tokenHash string) (*model.RefreshToken, error)
+	RevokeByID(ctx context.Context, id int64, revokedAt time.Time) error
+	RevokeAndReplace(ctx context.Context, id int64, revokedAt time.Time, replacedByTokenID int64) error
+	RevokeAllByUserID(ctx context.Context, userID int64, revokedAt time.Time) error
+}
+
 type EventRepository interface {
 	Create(ctx context.Context, event *model.Event) error
 	GetByID(ctx context.Context, id int64) (*model.Event, error)

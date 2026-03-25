@@ -34,12 +34,22 @@ type TransactionConfig struct {
 	MaxRetryDelayMs  int `yaml:"max_retry_delay_ms" env:"TX_MAX_RETRY_DELAY_MS" env-default:"100" validate:"gt=0"`
 }
 
+type AuthConfig struct {
+	JWTSecret           string `yaml:"jwt_secret" env:"AUTH_JWT_SECRET" validate:"required"`
+	AccessTTLMinutes    int    `yaml:"access_ttl_minutes" env:"AUTH_ACCESS_TTL_MINUTES" env-default:"15" validate:"gt=0"`
+	RefreshTTLHours     int    `yaml:"refresh_ttl_hours" env:"AUTH_REFRESH_TTL_HOURS" env-default:"168" validate:"gt=0"`
+	Issuer              string `yaml:"issuer" env:"AUTH_ISSUER" env-default:"eventbooker" validate:"required"`
+	RefreshCookieName   string `yaml:"refresh_cookie_name" env:"AUTH_REFRESH_COOKIE_NAME" env-default:"refresh_token" validate:"required"`
+	RefreshCookieSecure bool   `yaml:"refresh_cookie_secure" env:"AUTH_REFRESH_COOKIE_SECURE" env-default:"false"`
+}
+
 type AppConfig struct {
 	Name        string            `yaml:"name" env:"APP_NAME" env-default:"eventbooker" validate:"required"`
 	Env         string            `yaml:"env" env:"APP_ENV" env-default:"dev" validate:"required"`
 	HTTP        HTTPConfig        `yaml:"http" validate:"required"`
 	Postgres    PostgresConfig    `yaml:"postgres" validate:"required"`
 	Logger      LoggerConfig      `yaml:"logger" validate:"required"`
+	Auth        AuthConfig        `yaml:"auth" validate:"required"`
 	Transaction TransactionConfig `yaml:"transaction" validate:"required"`
 }
 
@@ -77,4 +87,12 @@ func (c TransactionConfig) BaseRetryDelay() time.Duration {
 
 func (c TransactionConfig) MaxRetryDelay() time.Duration {
 	return time.Duration(c.MaxRetryDelayMs) * time.Millisecond
+}
+
+func (c AuthConfig) AccessTTL() time.Duration {
+	return time.Duration(c.AccessTTLMinutes) * time.Minute
+}
+
+func (c AuthConfig) RefreshTTL() time.Duration {
+	return time.Duration(c.RefreshTTLHours) * time.Hour
 }

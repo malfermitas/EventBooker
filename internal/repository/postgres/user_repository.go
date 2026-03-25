@@ -18,12 +18,12 @@ func NewUserRepository(db *pgxdriver.Postgres) repository.UserRepository {
 
 func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 	query := `
-		INSERT INTO users (email, name, role)
-		VALUES ($1, $2, $3)
+		INSERT INTO users (email, name, password_hash, role)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id, created_at
 	`
 
-	err := getQueryExecuter(ctx, r.db).QueryRow(ctx, query, user.Email, user.Name, user.Role).Scan(&user.ID, &user.CreatedAt)
+	err := getQueryExecuter(ctx, r.db).QueryRow(ctx, query, user.Email, user.Name, user.PasswordHash, user.Role).Scan(&user.ID, &user.CreatedAt)
 	if err != nil {
 		return err
 	}
@@ -33,7 +33,7 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 
 func (r *UserRepository) GetByID(ctx context.Context, id int64) (*model.User, error) {
 	query := `
-		SELECT id, email, name, role, created_at
+		SELECT id, email, name, password_hash, role, created_at
 		FROM users
 		WHERE id = $1
 	`
@@ -43,7 +43,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id int64) (*model.User, er
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	query := `
-		SELECT id, email, name, role, created_at
+		SELECT id, email, name, password_hash, role, created_at
 		FROM users
 		WHERE email = $1
 	`

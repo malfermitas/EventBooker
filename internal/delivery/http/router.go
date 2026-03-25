@@ -11,6 +11,7 @@ func NewRouter(eventHandler handler.EventHandler) *ginext.Engine {
 	router := ginext.New("")
 	router.Use(ginext.Recovery())
 
+	router.GET("/events", eventHandler.ListEvents)
 	router.POST("/events", eventHandler.CreateEvent)
 	router.POST("/events/:id/book", eventHandler.BookEvent)
 	router.POST("/events/:id/confirm", eventHandler.ConfirmBooking)

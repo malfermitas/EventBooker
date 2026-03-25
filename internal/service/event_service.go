@@ -33,7 +33,7 @@ func NewEventService(
 }
 
 func (s *eventService) CreateEvent(ctx context.Context, input CreateEventInput) (*model.Event, error) {
-	if strings.TrimSpace(input.Title) == "" || input.Capacity <= 0 || input.BookingTTLSeconds <= 0 {
+	if strings.TrimSpace(input.Title) == "" || input.StartAt.IsZero() || input.Capacity <= 0 || input.BookingTTLSeconds <= 0 {
 		return nil, ErrInvalidInput
 	}
 
@@ -52,6 +52,10 @@ func (s *eventService) CreateEvent(ctx context.Context, input CreateEventInput) 
 	return event, nil
 }
 
+func (s *eventService) ListEvents(ctx context.Context) ([]*model.Event, error) {
+	return s.eventRepository.List(ctx)
+}
+
 func (s *eventService) GetEventDetails(ctx context.Context, eventID int64) (*EventDetails, error) {
 	if eventID <= 0 {
 		return nil, ErrInvalidInput
@@ -65,12 +69,7 @@ func (s *eventService) GetEventDetails(ctx context.Context, eventID int64) (*Eve
 		return nil, err
 	}
 
-	pendingCount, err := s.bookingRepository.CountByEventAndStatuses(ctx, eventID, []model.BookingStatus{model.BookingStatusPending})
-	if err != nil {
-		return nil, err
-	}
-
-	confirmedCount, err := s.bookingRepository.CountByEventAndStatuses(ctx, eventID, []model.BookingStatus{model.BookingStatusConfirmed})
+	stats, err := s.bookingRepository.GetStatsByEventID(ctx, eventID)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +79,7 @@ func (s *eventService) GetEventDetails(ctx context.Context, eventID int64) (*Eve
 		return nil, err
 	}
 
-	occupied := int(pendingCount + confirmedCount)
+	occupied := int(stats.PendingCount + stats.ConfirmedCount)
 	freeSeats := event.Capacity - occupied
 	if freeSeats < 0 {
 		freeSeats = 0
@@ -89,8 +88,8 @@ func (s *eventService) GetEventDetails(ctx context.Context, eventID int64) (*Eve
 	return &EventDetails{
 		Event:          event,
 		FreeSeats:      freeSeats,
-		PendingCount:   pendingCount,
-		ConfirmedCount: confirmedCount,
+		PendingCount:   stats.PendingCount,
+		ConfirmedCount: stats.ConfirmedCount,
 		Bookings:       bookings,
 	}, nil
 }
@@ -171,9 +170,16 @@ func (s *eventService) ConfirmBooking(ctx context.Context, input ConfirmBookingI
 
 	var confirmedBooking *model.Booking
 	err := s.txManager.WithinTx(ctx, func(txCtx context.Context) error {
-		if _, err := s.eventRepository.GetByID(txCtx, input.EventID); err != nil {
+		if _, err := s.eventRepository.LockByIDForUpdate(txCtx, input.EventID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrEventNotFound
+			}
+			return err
+		}
+
+		if _, err := s.userRepository.GetByID(txCtx, input.UserID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrUserNotFound
 			}
 			return err
 		}
@@ -188,7 +194,7 @@ func (s *eventService) ConfirmBooking(ctx context.Context, input ConfirmBookingI
 			return err
 		}
 
-		activeBooking, activeErr := s.bookingRepository.GetActiveByEventAndUser(txCtx, input.EventID, input.UserID)
+		latestBooking, activeErr := s.bookingRepository.GetLatestByEventAndUser(txCtx, input.EventID, input.UserID)
 		if activeErr != nil {
 			if errors.Is(activeErr, pgx.ErrNoRows) {
 				return ErrBookingNotFound
@@ -196,17 +202,18 @@ func (s *eventService) ConfirmBooking(ctx context.Context, input ConfirmBookingI
 			return activeErr
 		}
 
-		if activeBooking.Status == model.BookingStatusConfirmed {
-			confirmedBooking = activeBooking
+		if latestBooking.Status == model.BookingStatusConfirmed {
+			confirmedBooking = latestBooking
 			return nil
 		}
 
-		return ErrBookingExpired
+		if latestBooking.Status == model.BookingStatusExpired {
+			return ErrBookingExpired
+		}
+
+		return ErrBookingNotFound
 	})
 	if err != nil {
-		if errors.Is(err, ErrBookingExpired) {
-			return nil, ErrBookingExpired
-		}
 		return nil, err
 	}
 

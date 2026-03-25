@@ -35,6 +35,7 @@ type EventDetails struct {
 
 type EventService interface {
 	CreateEvent(ctx context.Context, input CreateEventInput) (*model.Event, error)
+	ListEvents(ctx context.Context) ([]*model.Event, error)
 	GetEventDetails(ctx context.Context, eventID int64) (*EventDetails, error)
 	BookEvent(ctx context.Context, input BookEventInput) (*model.Booking, error)
 	ConfirmBooking(ctx context.Context, input ConfirmBookingInput) (*model.Booking, error)

@@ -65,6 +65,19 @@ func (r *BookingRepository) GetActiveByEventAndUser(ctx context.Context, eventID
 	return scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, userID))
 }
 
+func (r *BookingRepository) GetLatestByEventAndUser(ctx context.Context, eventID, userID int64) (*model.Booking, error) {
+	query := `
+		SELECT id, event_id, user_id, status, created_at, expires_at, confirmed_at, cancel_reason
+		FROM bookings
+		WHERE event_id = $1
+		  AND user_id = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT 1
+	`
+
+	return scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, userID))
+}
+
 func (r *BookingRepository) ListByEventID(ctx context.Context, eventID int64) ([]*model.Booking, error) {
 	query := `
 		SELECT id, event_id, user_id, status, created_at, expires_at, confirmed_at, cancel_reason
@@ -93,6 +106,24 @@ func (r *BookingRepository) ListByEventID(ctx context.Context, eventID int64) ([
 	}
 
 	return bookings, nil
+}
+
+func (r *BookingRepository) GetStatsByEventID(ctx context.Context, eventID int64) (*repository.BookingStats, error) {
+	query := `
+		SELECT
+			COUNT(*) FILTER (WHERE status = 'PENDING') AS pending_count,
+			COUNT(*) FILTER (WHERE status = 'CONFIRMED') AS confirmed_count
+		FROM bookings
+		WHERE event_id = $1
+	`
+
+	stats := &repository.BookingStats{}
+	err := getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID).Scan(&stats.PendingCount, &stats.ConfirmedCount)
+	if err != nil {
+		return nil, err
+	}
+
+	return stats, nil
 }
 
 func (r *BookingRepository) CountByEventAndStatuses(ctx context.Context, eventID int64, statuses []model.BookingStatus) (int64, error) {
@@ -157,7 +188,6 @@ func (r *BookingRepository) ExpirePending(ctx context.Context, now time.Time, li
 		    cancel_reason = 'expired by deadline'
 		FROM to_expire e
 		WHERE b.id = e.id
-		RETURNING b.id
 	`
 
 	result, err := getQueryExecuter(ctx, r.db).Exec(ctx, query, now, limit)

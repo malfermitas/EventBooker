@@ -35,6 +35,15 @@ type eventDetailsResponse struct {
 	Bookings       []bookingResponse `json:"bookings"`
 }
 
+func eventResponsesFromModels(events []*model.Event) []eventResponse {
+	response := make([]eventResponse, 0, len(events))
+	for _, event := range events {
+		response = append(response, eventResponseFromModel(event))
+	}
+
+	return response
+}
+
 // eventResponseFromModel converts domain event model to HTTP response DTO.
 // Returns populated eventResponse.
 func eventResponseFromModel(event *model.Event) eventResponse {

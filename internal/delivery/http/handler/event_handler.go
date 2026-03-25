@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"eventbooker/internal/service"
 	"net/http"
 	"strconv"
@@ -59,11 +60,23 @@ func (h eventHandler) CreateEvent(ctx *ginext.Context) {
 		RequiresPayment:   requiresPayment,
 	})
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeServiceError(ctx, err)
 		return
 	}
 
 	ctx.JSON(http.StatusCreated, eventResponseFromModel(event))
+}
+
+// ListEvents handles GET /events and returns a list of event JSON objects with HTTP 200.
+// Returns HTTP 500 for service errors.
+func (h eventHandler) ListEvents(ctx *ginext.Context) {
+	events, err := h.eventService.ListEvents(ctx.Request.Context())
+	if err != nil {
+		writeServiceError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, eventResponsesFromModels(events))
 }
 
 // BookEvent handles POST /events/:id/book and returns booking JSON with HTTP 201.
@@ -79,7 +92,7 @@ func (h eventHandler) BookEvent(ctx *ginext.Context) {
 		UserID:  userID,
 	})
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeServiceError(ctx, err)
 		return
 	}
 
@@ -99,7 +112,7 @@ func (h eventHandler) ConfirmBooking(ctx *ginext.Context) {
 		UserID:  userID,
 	})
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeServiceError(ctx, err)
 		return
 	}
 
@@ -116,7 +129,7 @@ func (h eventHandler) GetEvent(ctx *ginext.Context) {
 
 	details, err := h.eventService.GetEventDetails(ctx.Request.Context(), eventID)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeServiceError(ctx, err)
 		return
 	}
 
@@ -151,4 +164,17 @@ func parseBookingActionInput(ctx *ginext.Context) (int64, int64, bool) {
 	}
 
 	return eventID, req.UserID, true
+}
+
+func writeServiceError(ctx *ginext.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrInvalidInput):
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrEventNotFound), errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrBookingNotFound):
+		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrNoSeatsAvailable), errors.Is(err, service.ErrBookingAlreadyExist), errors.Is(err, service.ErrBookingExpired):
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	default:
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
 }

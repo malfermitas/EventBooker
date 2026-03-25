@@ -5,16 +5,19 @@ import (
 	"time"
 
 	"eventbooker/internal/domain/model"
+	"eventbooker/internal/logging"
 	"eventbooker/internal/repository"
+
 	pgxdriver "github.com/wb-go/wbf/dbpg/pgx-driver"
 )
 
 type BookingRepository struct {
-	db *pgxdriver.Postgres
+	logger *logging.EventBookerLogger
+	db     *pgxdriver.Postgres
 }
 
-func NewBookingRepository(db *pgxdriver.Postgres) repository.BookingRepository {
-	return &BookingRepository{db: db}
+func NewBookingRepository(logger *logging.EventBookerLogger, db *pgxdriver.Postgres) repository.BookingRepository {
+	return &BookingRepository{logger: logger, db: db}
 }
 
 func (r *BookingRepository) Create(ctx context.Context, booking *model.Booking) error {
@@ -35,6 +38,7 @@ func (r *BookingRepository) Create(ctx context.Context, booking *model.Booking) 
 		booking.CancelReason,
 	).Scan(&booking.ID, &booking.CreatedAt)
 	if err != nil {
+		r.logger.Ctx(ctx).Errorw("failed to create booking in postgres", "event_id", booking.EventID, "user_id", booking.UserID, "error", err)
 		return err
 	}
 
@@ -48,7 +52,13 @@ func (r *BookingRepository) GetByID(ctx context.Context, id int64) (*model.Booki
 		WHERE id = $1
 	`
 
-	return scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, id))
+	booking, err := scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, id))
+	if err != nil {
+		r.logger.Ctx(ctx).Debugw("failed to get booking by id from postgres", "booking_id", id, "error", err)
+		return nil, err
+	}
+
+	return booking, nil
 }
 
 func (r *BookingRepository) GetActiveByEventAndUser(ctx context.Context, eventID, userID int64) (*model.Booking, error) {
@@ -62,7 +72,13 @@ func (r *BookingRepository) GetActiveByEventAndUser(ctx context.Context, eventID
 		LIMIT 1
 	`
 
-	return scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, userID))
+	booking, err := scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, userID))
+	if err != nil {
+		r.logger.Ctx(ctx).Debugw("failed to get active booking from postgres", "event_id", eventID, "user_id", userID, "error", err)
+		return nil, err
+	}
+
+	return booking, nil
 }
 
 func (r *BookingRepository) GetLatestByEventAndUser(ctx context.Context, eventID, userID int64) (*model.Booking, error) {
@@ -75,7 +91,13 @@ func (r *BookingRepository) GetLatestByEventAndUser(ctx context.Context, eventID
 		LIMIT 1
 	`
 
-	return scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, userID))
+	booking, err := scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, userID))
+	if err != nil {
+		r.logger.Ctx(ctx).Debugw("failed to get latest booking from postgres", "event_id", eventID, "user_id", userID, "error", err)
+		return nil, err
+	}
+
+	return booking, nil
 }
 
 func (r *BookingRepository) ListByEventID(ctx context.Context, eventID int64) ([]*model.Booking, error) {
@@ -88,6 +110,7 @@ func (r *BookingRepository) ListByEventID(ctx context.Context, eventID int64) ([
 
 	rows, err := getQueryExecuter(ctx, r.db).Query(ctx, query, eventID)
 	if err != nil {
+		r.logger.Ctx(ctx).Errorw("failed to list bookings by event from postgres", "event_id", eventID, "error", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -96,12 +119,14 @@ func (r *BookingRepository) ListByEventID(ctx context.Context, eventID int64) ([
 	for rows.Next() {
 		booking, scanErr := scanBooking(rows)
 		if scanErr != nil {
+			r.logger.Ctx(ctx).Errorw("failed to scan booking row from postgres", "event_id", eventID, "error", scanErr)
 			return nil, scanErr
 		}
 		bookings = append(bookings, booking)
 	}
 
 	if err = rows.Err(); err != nil {
+		r.logger.Ctx(ctx).Errorw("failed while iterating booking rows from postgres", "event_id", eventID, "error", err)
 		return nil, err
 	}
 
@@ -120,6 +145,7 @@ func (r *BookingRepository) GetStatsByEventID(ctx context.Context, eventID int64
 	stats := &repository.BookingStats{}
 	err := getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID).Scan(&stats.PendingCount, &stats.ConfirmedCount)
 	if err != nil {
+		r.logger.Ctx(ctx).Errorw("failed to load booking stats from postgres", "event_id", eventID, "error", err)
 		return nil, err
 	}
 
@@ -146,6 +172,12 @@ func (r *BookingRepository) CountByEventAndStatuses(ctx context.Context, eventID
 	var count int64
 	err := getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, statusStrings).Scan(&count)
 	if err != nil {
+		r.logger.Ctx(ctx).Errorw(
+			"failed to count bookings by statuses from postgres",
+			"event_id", eventID,
+			"statuses", statusStrings,
+			"error", err,
+		)
 		return 0, err
 	}
 
@@ -165,7 +197,18 @@ func (r *BookingRepository) ConfirmPendingByEventAndUser(ctx context.Context, ev
 		RETURNING id, event_id, user_id, status, created_at, expires_at, confirmed_at, cancel_reason
 	`
 
-	return scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, userID, confirmedAt))
+	booking, err := scanBooking(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, eventID, userID, confirmedAt))
+	if err != nil {
+		r.logger.Ctx(ctx).Debugw(
+			"failed to confirm pending booking in postgres",
+			"event_id", eventID,
+			"user_id", userID,
+			"error", err,
+		)
+		return nil, err
+	}
+
+	return booking, nil
 }
 
 func (r *BookingRepository) ExpirePending(ctx context.Context, now time.Time, limit int) (int64, error) {
@@ -192,6 +235,11 @@ func (r *BookingRepository) ExpirePending(ctx context.Context, now time.Time, li
 
 	result, err := getQueryExecuter(ctx, r.db).Exec(ctx, query, now, limit)
 	if err != nil {
+		r.logger.Ctx(ctx).Errorw(
+			"failed to expire pending bookings in postgres",
+			"limit", limit,
+			"error", err,
+		)
 		return 0, err
 	}
 

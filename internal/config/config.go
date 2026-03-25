@@ -43,6 +43,13 @@ type AuthConfig struct {
 	RefreshCookieSecure bool   `yaml:"refresh_cookie_secure" env:"AUTH_REFRESH_COOKIE_SECURE" env-default:"false"`
 }
 
+type NotifierConfig struct {
+	Enabled             bool   `yaml:"enabled" env:"NOTIFIER_ENABLED" env-default:"false"`
+	BaseURL             string `yaml:"base_url" env:"NOTIFIER_BASE_URL"`
+	TimeoutSeconds      int    `yaml:"timeout_seconds" env:"NOTIFIER_TIMEOUT_SECONDS" env-default:"5" validate:"gte=1"`
+	TelegramBotUsername string `yaml:"telegram_bot_username" env:"NOTIFIER_TELEGRAM_BOT_USERNAME"`
+}
+
 type AppConfig struct {
 	Name        string            `yaml:"name" env:"APP_NAME" env-default:"eventbooker" validate:"required"`
 	Env         string            `yaml:"env" env:"APP_ENV" env-default:"dev" validate:"required"`
@@ -50,6 +57,7 @@ type AppConfig struct {
 	Postgres    PostgresConfig    `yaml:"postgres" validate:"required"`
 	Logger      LoggerConfig      `yaml:"logger" validate:"required"`
 	Auth        AuthConfig        `yaml:"auth" validate:"required"`
+	Notifier    NotifierConfig    `yaml:"notifier" validate:"required"`
 	Transaction TransactionConfig `yaml:"transaction" validate:"required"`
 }
 
@@ -95,4 +103,8 @@ func (c AuthConfig) AccessTTL() time.Duration {
 
 func (c AuthConfig) RefreshTTL() time.Duration {
 	return time.Duration(c.RefreshTTLHours) * time.Hour
+}
+
+func (c NotifierConfig) Timeout() time.Duration {
+	return time.Duration(c.TimeoutSeconds) * time.Second
 }

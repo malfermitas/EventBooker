@@ -14,6 +14,18 @@ app:
   logger:
     engine: "slog"
     level: "info"
+  auth:
+    jwt_secret: "dev-secret-change-me"
+    access_ttl_minutes: 15
+    refresh_ttl_hours: 168
+    issuer: "eventbooker"
+    refresh_cookie_name: "refresh_token"
+    refresh_cookie_secure: false
+  notifier:
+    enabled: false
+    base_url: "http://localhost:8081"
+    timeout_seconds: 5
+    telegram_bot_username: ""
   transaction:
     max_attempts: 3
     base_retry_delay_ms: 10

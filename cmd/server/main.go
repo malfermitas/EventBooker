@@ -12,12 +12,13 @@ import (
 	deliveryhttp "eventbooker/internal/delivery/http"
 	"eventbooker/internal/delivery/http/handler"
 	transportmiddleware "eventbooker/internal/delivery/http/middleware"
+	"eventbooker/internal/integration/notifier"
+	"eventbooker/internal/logging"
 	"eventbooker/internal/repository/postgres"
 	"eventbooker/internal/service"
 
 	pgxdriver "github.com/wb-go/wbf/dbpg/pgx-driver"
 	"github.com/wb-go/wbf/dbpg/pgx-driver/transaction"
-	"github.com/wb-go/wbf/logger"
 )
 
 func main() {
@@ -32,12 +33,7 @@ func run() error {
 		return err
 	}
 
-	appLogger, err := logger.InitLogger(
-		parseLoggerEngine(cfg.Logger.Engine),
-		cfg.Name,
-		cfg.Env,
-		logger.WithLevel(parseLogLevel(cfg.Logger.Level)),
-	)
+	appLogger, err := logging.NewEventBookerLogger(cfg.Name, cfg.Env, cfg.Logger.Engine, cfg.Logger.Level)
 	if err != nil {
 		return err
 	}
@@ -68,28 +64,34 @@ func run() error {
 		return err
 	}
 
-	userRepository := postgres.NewUserRepository(db)
-	eventRepository := postgres.NewEventRepository(db)
-	bookingRepository := postgres.NewBookingRepository(db)
-	refreshTokenRepository := postgres.NewRefreshTokenRepository(db)
+	userRepository := postgres.NewUserRepository(appLogger, db)
+	eventRepository := postgres.NewEventRepository(appLogger, db)
+	bookingRepository := postgres.NewBookingRepository(appLogger, db)
+	refreshTokenRepository := postgres.NewRefreshTokenRepository(appLogger, db)
+	notifierClient := notifier.NewClient(cfg.Notifier, appLogger)
 
 	eventService := service.NewEventService(
+		appLogger,
+		notifierClient,
 		postgres.NewTxManager(txManager),
 		userRepository,
 		eventRepository,
 		bookingRepository,
 	)
 	authService := service.NewAuthService(
+		appLogger,
+		notifierClient,
 		postgres.NewTxManager(txManager),
 		userRepository,
 		refreshTokenRepository,
 		cfg.Auth,
 	)
 
-	authHandler := handler.NewAuthHandler(authService, cfg.Auth)
-	eventHandler := handler.NewEventHandler(eventService)
-	authMiddleware := transportmiddleware.NewAuthMiddleware(authService)
-	router := deliveryhttp.NewRouter(authHandler, eventHandler, authMiddleware)
+	authHandler := handler.NewAuthHandler(appLogger, authService, cfg.Auth)
+	eventHandler := handler.NewEventHandler(appLogger, eventService)
+	frontendHandler := handler.NewFrontendHandler(cfg.Notifier.TelegramBotUsername)
+	authMiddleware := transportmiddleware.NewAuthMiddleware(appLogger, authService)
+	router := deliveryhttp.NewRouter(authHandler, eventHandler, frontendHandler, authMiddleware)
 
 	server := &stdhttp.Server{
 		Addr:         cfg.HTTP.Addr,
@@ -103,6 +105,7 @@ func run() error {
 	go func() {
 		appLogger.Infow("starting http server", "addr", server.Addr)
 		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, stdhttp.ErrServerClosed) {
+			appLogger.Errorw("http server stopped with error", "error", serveErr)
 			errCh <- serveErr
 		}
 	}()
@@ -122,30 +125,4 @@ func run() error {
 
 	appLogger.Info("shutting down http server")
 	return server.Shutdown(shutdownCtx)
-}
-
-func parseLoggerEngine(value string) logger.Engine {
-	switch value {
-	case string(logger.ZapEngine):
-		return logger.ZapEngine
-	case string(logger.ZerologEngine):
-		return logger.ZerologEngine
-	case string(logger.LogrusEngine):
-		return logger.LogrusEngine
-	default:
-		return logger.SlogEngine
-	}
-}
-
-func parseLogLevel(value string) logger.Level {
-	switch value {
-	case "debug":
-		return logger.DebugLevel
-	case "warn":
-		return logger.WarnLevel
-	case "error":
-		return logger.ErrorLevel
-	default:
-		return logger.InfoLevel
-	}
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"eventbooker/internal/delivery/http/middleware"
+	"eventbooker/internal/logging"
 	"eventbooker/internal/service"
 	"net/http"
 	"strconv"
@@ -13,12 +14,13 @@ import (
 )
 
 type eventHandler struct {
+	logger       *logging.EventBookerLogger
 	eventService service.EventService
 }
 
 // NewEventHandler builds an EventHandler and returns it as the interface type.
-func NewEventHandler(eventService service.EventService) EventHandler {
-	return eventHandler{eventService: eventService}
+func NewEventHandler(logger *logging.EventBookerLogger, eventService service.EventService) EventHandler {
+	return eventHandler{logger: logger, eventService: eventService}
 }
 
 type createEventRequest struct {
@@ -34,12 +36,14 @@ type createEventRequest struct {
 func (h eventHandler) CreateEvent(ctx *ginext.Context) {
 	var req createEventRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
+		h.logger.Ctx(ctx.Request.Context()).Warnw("create event request validation failed", "error", err)
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	startAt, err := time.Parse(time.RFC3339, req.StartAt)
 	if err != nil {
+		h.logger.Ctx(ctx.Request.Context()).Warnw("create event request has invalid start_at", "value", req.StartAt)
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "start_at must be in RFC3339 format"})
 		return
 	}
@@ -57,7 +61,7 @@ func (h eventHandler) CreateEvent(ctx *ginext.Context) {
 		RequiresPayment:   requiresPayment,
 	})
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -69,7 +73,7 @@ func (h eventHandler) CreateEvent(ctx *ginext.Context) {
 func (h eventHandler) ListEvents(ctx *ginext.Context) {
 	events, err := h.eventService.ListEvents(ctx.Request.Context())
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -86,6 +90,7 @@ func (h eventHandler) BookEvent(ctx *ginext.Context) {
 
 	userID, ok := currentUserID(ctx)
 	if !ok {
+		h.logger.Ctx(ctx.Request.Context()).Warn("current user is missing in context")
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": service.ErrUnauthorized.Error()})
 		return
 	}
@@ -95,7 +100,7 @@ func (h eventHandler) BookEvent(ctx *ginext.Context) {
 		UserID:  userID,
 	})
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -112,6 +117,7 @@ func (h eventHandler) ConfirmBooking(ctx *ginext.Context) {
 
 	userID, ok := currentUserID(ctx)
 	if !ok {
+		h.logger.Ctx(ctx.Request.Context()).Warn("current user is missing in context")
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": service.ErrUnauthorized.Error()})
 		return
 	}
@@ -121,7 +127,7 @@ func (h eventHandler) ConfirmBooking(ctx *ginext.Context) {
 		UserID:  userID,
 	})
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -138,7 +144,7 @@ func (h eventHandler) GetEvent(ctx *ginext.Context) {
 
 	details, err := h.eventService.GetEventDetails(ctx.Request.Context(), eventID)
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -151,6 +157,7 @@ func parseEventID(ctx *ginext.Context) (int64, bool) {
 	eventIDRaw := ctx.Param("id")
 	eventID, err := strconv.ParseInt(eventIDRaw, 10, 64)
 	if err != nil || eventID <= 0 {
+		// request validation errors are logged by callers when needed
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid event id"})
 		return 0, false
 	}
@@ -168,19 +175,27 @@ func currentUserID(ctx *ginext.Context) (int64, bool) {
 	return userID, ok
 }
 
-func writeServiceError(ctx *ginext.Context, err error) {
+func writeServiceError(ctx *ginext.Context, logger *logging.EventBookerLogger, err error) {
+	requestLogger := logger.Ctx(ctx.Request.Context())
+
 	switch {
 	case errors.Is(err, service.ErrInvalidInput):
+		requestLogger.Warnw("request failed with invalid input", "error", err)
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrUnauthorized), errors.Is(err, service.ErrInvalidCredentials), errors.Is(err, service.ErrSessionNotFound), errors.Is(err, service.ErrSessionExpired), errors.Is(err, service.ErrSessionRevoked):
+		requestLogger.Warnw("request failed with unauthorized error", "error", err)
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrForbidden):
+		requestLogger.Warnw("request failed with forbidden error", "error", err)
 		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrEventNotFound), errors.Is(err, service.ErrUserNotFound), errors.Is(err, service.ErrBookingNotFound):
+		requestLogger.Warnw("request failed with not found error", "error", err)
 		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, service.ErrNoSeatsAvailable), errors.Is(err, service.ErrBookingAlreadyExist), errors.Is(err, service.ErrBookingExpired), errors.Is(err, service.ErrEmailAlreadyExists):
+		requestLogger.Warnw("request failed with conflict error", "error", err)
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	default:
+		requestLogger.Errorw("request failed with internal error", "error", err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 	}
 }

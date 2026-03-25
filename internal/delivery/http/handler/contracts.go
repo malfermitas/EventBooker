@@ -17,3 +17,7 @@ type AuthHandler interface {
 	Logout(ctx *ginext.Context)
 	Me(ctx *ginext.Context)
 }
+
+type FrontendHandler interface {
+	Index(ctx *ginext.Context)
+}

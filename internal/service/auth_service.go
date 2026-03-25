@@ -14,6 +14,7 @@ import (
 
 	"eventbooker/internal/config"
 	"eventbooker/internal/domain/model"
+	"eventbooker/internal/logging"
 	"eventbooker/internal/repository"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -23,6 +24,8 @@ import (
 )
 
 type authService struct {
+	logger                 *logging.EventBookerLogger
+	notifier               NotificationSender
 	txManager              repository.TxManager
 	userRepository         repository.UserRepository
 	refreshTokenRepository repository.RefreshTokenRepository
@@ -36,12 +39,16 @@ type accessTokenClaims struct {
 }
 
 func NewAuthService(
+	logger *logging.EventBookerLogger,
+	notifier NotificationSender,
 	txManager repository.TxManager,
 	userRepository repository.UserRepository,
 	refreshTokenRepository repository.RefreshTokenRepository,
 	config config.AuthConfig,
 ) AuthService {
 	return &authService{
+		logger:                 logger,
+		notifier:               notifier,
 		txManager:              txManager,
 		userRepository:         userRepository,
 		refreshTokenRepository: refreshTokenRepository,
@@ -50,14 +57,17 @@ func NewAuthService(
 }
 
 func (s *authService) Register(ctx context.Context, input RegisterInput) (*model.User, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	email := strings.TrimSpace(strings.ToLower(input.Email))
 	name := strings.TrimSpace(input.Name)
 	if !isValidEmail(email) || name == "" || len(input.Password) < 8 {
+		requestLogger.Warnw("user registration rejected due to invalid input", "email", email)
 		return nil, ErrInvalidInput
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
 	if err != nil {
+		requestLogger.Errorw("failed to hash user password", "email", email, "error", err)
 		return nil, err
 	}
 
@@ -70,30 +80,40 @@ func (s *authService) Register(ctx context.Context, input RegisterInput) (*model
 
 	if err := s.userRepository.Create(ctx, user); err != nil {
 		if isUniqueViolation(err) {
+			requestLogger.Warnw("user registration rejected because email already exists", "email", email)
 			return nil, ErrEmailAlreadyExists
 		}
+		requestLogger.Errorw("failed to create user", "email", email, "error", err)
 		return nil, err
 	}
 
+	requestLogger.Infow("user registered", "user_id", user.ID, "email", user.Email)
+	s.notifyWelcome(ctx, user)
 	return user, nil
 }
 
 func (s *authService) Login(ctx context.Context, input LoginInput) (*LoginResult, string, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	user, err := s.authenticateUser(ctx, input.Email, input.Password)
 	if err != nil {
+		requestLogger.Warnw("user login failed", "email", strings.TrimSpace(strings.ToLower(input.Email)), "error", err)
 		return nil, "", err
 	}
 
 	result, refreshToken, err := s.issueSession(ctx, user, input.UserAgent, input.IPAddress, nil)
 	if err != nil {
+		requestLogger.Errorw("failed to issue login session", "user_id", user.ID, "error", err)
 		return nil, "", err
 	}
 
+	requestLogger.Infow("user logged in", "user_id", user.ID)
 	return result, refreshToken, nil
 }
 
 func (s *authService) Refresh(ctx context.Context, input RefreshInput) (*RefreshResult, string, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	if strings.TrimSpace(input.RefreshToken) == "" {
+		requestLogger.Warn("refresh rejected because token is empty")
 		return nil, "", ErrUnauthorized
 	}
 
@@ -135,30 +155,43 @@ func (s *authService) Refresh(ctx context.Context, input RefreshInput) (*Refresh
 		return nil
 	})
 	if err != nil {
+		requestLogger.Warnw("session refresh failed", "error", err)
 		return nil, "", err
 	}
 
+	requestLogger.Info("session refreshed")
 	return result, rawRefreshToken, nil
 }
 
 func (s *authService) Logout(ctx context.Context, input LogoutInput) error {
+	requestLogger := s.logger.Ctx(ctx)
 	if strings.TrimSpace(input.RefreshToken) == "" {
+		requestLogger.Debug("logout skipped because refresh token is empty")
 		return nil
 	}
 
 	token, err := s.refreshTokenRepository.GetByTokenHash(ctx, hashRefreshToken(input.RefreshToken))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			requestLogger.Debug("logout skipped because session was not found")
 			return nil
 		}
+		requestLogger.Errorw("failed to load refresh token for logout", "error", err)
 		return err
 	}
 
 	if token.RevokedAt != nil {
+		requestLogger.Debugw("logout skipped because session is already revoked", "token_id", token.ID)
 		return nil
 	}
 
-	return s.refreshTokenRepository.RevokeByID(ctx, token.ID, time.Now().UTC())
+	if err := s.refreshTokenRepository.RevokeByID(ctx, token.ID, time.Now().UTC()); err != nil {
+		requestLogger.Errorw("failed to revoke refresh token", "token_id", token.ID, "error", err)
+		return err
+	}
+
+	requestLogger.Infow("user logged out", "user_id", token.UserID)
+	return nil
 }
 
 func (s *authService) ParseAccessToken(token string) (*AuthClaims, error) {
@@ -182,15 +215,19 @@ func (s *authService) ParseAccessToken(token string) (*AuthClaims, error) {
 }
 
 func (s *authService) GetUser(ctx context.Context, userID int64) (*model.User, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	if userID <= 0 {
+		requestLogger.Warnw("get user rejected due to invalid user id", "user_id", userID)
 		return nil, ErrInvalidInput
 	}
 
 	user, err := s.userRepository.GetByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			requestLogger.Warnw("user not found", "user_id", userID)
 			return nil, ErrUserNotFound
 		}
+		requestLogger.Errorw("failed to load user", "user_id", userID, "error", err)
 		return nil, err
 	}
 
@@ -198,15 +235,20 @@ func (s *authService) GetUser(ctx context.Context, userID int64) (*model.User, e
 }
 
 func (s *authService) authenticateUser(ctx context.Context, email, password string) (*model.User, error) {
-	user, err := s.userRepository.GetByEmail(ctx, strings.TrimSpace(strings.ToLower(email)))
+	normalizedEmail := strings.TrimSpace(strings.ToLower(email))
+	requestLogger := s.logger.Ctx(ctx)
+	user, err := s.userRepository.GetByEmail(ctx, normalizedEmail)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			requestLogger.Warnw("authentication failed because user was not found", "email", normalizedEmail)
 			return nil, ErrInvalidCredentials
 		}
+		requestLogger.Errorw("failed to load user for authentication", "email", normalizedEmail, "error", err)
 		return nil, err
 	}
 
 	if bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password)) != nil {
+		requestLogger.Warnw("authentication failed due to invalid password", "user_id", user.ID)
 		return nil, ErrInvalidCredentials
 	}
 
@@ -220,13 +262,16 @@ func (s *authService) issueSession(
 	ipAddress string,
 	replacedToken *model.RefreshToken,
 ) (*LoginResult, string, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	accessToken, expiresIn, err := s.generateAccessToken(user)
 	if err != nil {
+		requestLogger.Errorw("failed to generate access token", "user_id", user.ID, "error", err)
 		return nil, "", err
 	}
 
 	rawRefreshToken, err := generateRefreshToken()
 	if err != nil {
+		requestLogger.Errorw("failed to generate refresh token", "user_id", user.ID, "error", err)
 		return nil, "", err
 	}
 
@@ -243,11 +288,13 @@ func (s *authService) issueSession(
 	}
 
 	if err := s.refreshTokenRepository.Create(ctx, refreshToken); err != nil {
+		requestLogger.Errorw("failed to persist refresh token", "user_id", user.ID, "error", err)
 		return nil, "", err
 	}
 
 	if replacedToken != nil {
 		if err := s.refreshTokenRepository.RevokeAndReplace(ctx, replacedToken.ID, time.Now().UTC(), refreshToken.ID); err != nil {
+			requestLogger.Errorw("failed to rotate refresh token", "old_token_id", replacedToken.ID, "new_token_id", refreshToken.ID, "error", err)
 			return nil, "", err
 		}
 	}
@@ -320,4 +367,20 @@ func parseSubject(subject string) (int64, error) {
 	}
 
 	return userID, nil
+}
+
+func (s *authService) notifyWelcome(ctx context.Context, user *model.User) {
+	if s.notifier == nil {
+		return
+	}
+
+	message := fmt.Sprintf(
+		"Welcome to EventBooker, %s! Your account has been created successfully. To link Telegram notifications, send /start %d to the DelayedNotifier bot.",
+		user.Name,
+		user.ID,
+	)
+
+	if err := s.notifier.ScheduleEmail(ctx, user.Email, message, time.Now().UTC()); err != nil {
+		s.logger.Ctx(ctx).Warnw("failed to schedule welcome notification", "user_id", user.ID, "error", err)
+	}
 }

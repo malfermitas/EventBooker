@@ -52,6 +52,11 @@ type RefreshResult struct {
 	User   *model.User
 }
 
+type NotificationSender interface {
+	ScheduleEmail(ctx context.Context, email, message string, sendAt time.Time) error
+	ScheduleTelegram(ctx context.Context, userID int64, message string, sendAt time.Time) error
+}
+
 type CreateEventInput struct {
 	Title             string
 	StartAt           time.Time

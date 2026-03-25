@@ -2,6 +2,7 @@ package handler
 
 import (
 	"eventbooker/internal/config"
+	"eventbooker/internal/logging"
 	"eventbooker/internal/service"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 )
 
 type authHandler struct {
+	logger      *logging.EventBookerLogger
 	authService service.AuthService
 	config      config.AuthConfig
 }
@@ -26,13 +28,14 @@ type loginRequest struct {
 	Password string `json:"password" binding:"required"`
 }
 
-func NewAuthHandler(authService service.AuthService, config config.AuthConfig) AuthHandler {
-	return authHandler{authService: authService, config: config}
+func NewAuthHandler(logger *logging.EventBookerLogger, authService service.AuthService, config config.AuthConfig) AuthHandler {
+	return authHandler{logger: logger, authService: authService, config: config}
 }
 
 func (h authHandler) Register(ctx *ginext.Context) {
 	var req registerRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
+		h.logger.Ctx(ctx.Request.Context()).Warnw("register request validation failed", "error", err)
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -43,7 +46,7 @@ func (h authHandler) Register(ctx *ginext.Context) {
 		Password: req.Password,
 	})
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -53,6 +56,7 @@ func (h authHandler) Register(ctx *ginext.Context) {
 func (h authHandler) Login(ctx *ginext.Context) {
 	var req loginRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
+		h.logger.Ctx(ctx.Request.Context()).Warnw("login request validation failed", "error", err)
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -64,7 +68,7 @@ func (h authHandler) Login(ctx *ginext.Context) {
 		IPAddress: clientIP(ctx),
 	})
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -75,6 +79,7 @@ func (h authHandler) Login(ctx *ginext.Context) {
 func (h authHandler) Refresh(ctx *ginext.Context) {
 	refreshToken, err := ctx.Cookie(h.config.RefreshCookieName)
 	if err != nil {
+		h.logger.Ctx(ctx.Request.Context()).Warn("refresh token cookie is missing")
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": service.ErrUnauthorized.Error()})
 		return
 	}
@@ -85,7 +90,7 @@ func (h authHandler) Refresh(ctx *ginext.Context) {
 		IPAddress:    clientIP(ctx),
 	})
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -96,7 +101,7 @@ func (h authHandler) Refresh(ctx *ginext.Context) {
 func (h authHandler) Logout(ctx *ginext.Context) {
 	refreshToken, _ := ctx.Cookie(h.config.RefreshCookieName)
 	if err := h.authService.Logout(ctx.Request.Context(), service.LogoutInput{RefreshToken: refreshToken}); err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 
@@ -107,13 +112,14 @@ func (h authHandler) Logout(ctx *ginext.Context) {
 func (h authHandler) Me(ctx *ginext.Context) {
 	userID, ok := currentUserID(ctx)
 	if !ok {
+		h.logger.Ctx(ctx.Request.Context()).Warn("current user is missing in context")
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": service.ErrUnauthorized.Error()})
 		return
 	}
 
 	user, err := h.authService.GetUser(ctx.Request.Context(), userID)
 	if err != nil {
-		writeServiceError(ctx, err)
+		writeServiceError(ctx, h.logger, err)
 		return
 	}
 

@@ -3,15 +3,19 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"eventbooker/internal/domain/model"
+	"eventbooker/internal/logging"
 	"eventbooker/internal/repository"
 	"github.com/jackc/pgx/v5"
 )
 
 type eventService struct {
+	logger            *logging.EventBookerLogger
+	notifier          NotificationSender
 	txManager         repository.TxManager
 	userRepository    repository.UserRepository
 	eventRepository   repository.EventRepository
@@ -19,12 +23,16 @@ type eventService struct {
 }
 
 func NewEventService(
+	logger *logging.EventBookerLogger,
+	notifier NotificationSender,
 	txManager repository.TxManager,
 	userRepository repository.UserRepository,
 	eventRepository repository.EventRepository,
 	bookingRepository repository.BookingRepository,
 ) EventService {
 	return &eventService{
+		logger:            logger,
+		notifier:          notifier,
 		txManager:         txManager,
 		userRepository:    userRepository,
 		eventRepository:   eventRepository,
@@ -33,7 +41,9 @@ func NewEventService(
 }
 
 func (s *eventService) CreateEvent(ctx context.Context, input CreateEventInput) (*model.Event, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	if strings.TrimSpace(input.Title) == "" || input.StartAt.IsZero() || input.Capacity <= 0 || input.BookingTTLSeconds <= 0 {
+		requestLogger.Warn("event creation rejected due to invalid input")
 		return nil, ErrInvalidInput
 	}
 
@@ -46,36 +56,50 @@ func (s *eventService) CreateEvent(ctx context.Context, input CreateEventInput) 
 	}
 
 	if err := s.eventRepository.Create(ctx, event); err != nil {
+		requestLogger.Errorw("failed to create event", "title", event.Title, "error", err)
 		return nil, err
 	}
 
+	requestLogger.Infow("event created", "event_id", event.ID, "title", event.Title)
 	return event, nil
 }
 
 func (s *eventService) ListEvents(ctx context.Context) ([]*model.Event, error) {
-	return s.eventRepository.List(ctx)
+	events, err := s.eventRepository.List(ctx)
+	if err != nil {
+		s.logger.Ctx(ctx).Errorw("failed to list events", "error", err)
+		return nil, err
+	}
+
+	return events, nil
 }
 
 func (s *eventService) GetEventDetails(ctx context.Context, eventID int64) (*EventDetails, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	if eventID <= 0 {
+		requestLogger.Warnw("event details rejected due to invalid event id", "event_id", eventID)
 		return nil, ErrInvalidInput
 	}
 
 	event, err := s.eventRepository.GetByID(ctx, eventID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			requestLogger.Warnw("event not found", "event_id", eventID)
 			return nil, ErrEventNotFound
 		}
+		requestLogger.Errorw("failed to load event details", "event_id", eventID, "error", err)
 		return nil, err
 	}
 
 	stats, err := s.bookingRepository.GetStatsByEventID(ctx, eventID)
 	if err != nil {
+		requestLogger.Errorw("failed to load event booking stats", "event_id", eventID, "error", err)
 		return nil, err
 	}
 
 	bookings, err := s.bookingRepository.ListByEventID(ctx, eventID)
 	if err != nil {
+		requestLogger.Errorw("failed to load event bookings", "event_id", eventID, "error", err)
 		return nil, err
 	}
 
@@ -95,11 +119,14 @@ func (s *eventService) GetEventDetails(ctx context.Context, eventID int64) (*Eve
 }
 
 func (s *eventService) BookEvent(ctx context.Context, input BookEventInput) (*model.Booking, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	if input.EventID <= 0 || input.UserID <= 0 {
+		requestLogger.Warnw("event booking rejected due to invalid input", "event_id", input.EventID, "user_id", input.UserID)
 		return nil, ErrInvalidInput
 	}
 
 	var booking *model.Booking
+	var eventTitle string
 	err := s.txManager.WithinTx(ctx, func(txCtx context.Context) error {
 		event, err := s.eventRepository.LockByIDForUpdate(txCtx, input.EventID)
 		if err != nil {
@@ -108,6 +135,8 @@ func (s *eventService) BookEvent(ctx context.Context, input BookEventInput) (*mo
 			}
 			return err
 		}
+
+		eventTitle = event.Title
 
 		if _, err = s.userRepository.GetByID(txCtx, input.UserID); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -157,14 +186,19 @@ func (s *eventService) BookEvent(ctx context.Context, input BookEventInput) (*mo
 		return nil
 	})
 	if err != nil {
+		requestLogger.Warnw("event booking failed", "event_id", input.EventID, "user_id", input.UserID, "error", err)
 		return nil, err
 	}
 
+	requestLogger.Infow("event booked", "event_id", input.EventID, "user_id", input.UserID, "booking_id", booking.ID, "status", booking.Status)
+	s.notifyBookingCreated(ctx, input.UserID, eventTitle, booking)
 	return booking, nil
 }
 
 func (s *eventService) ConfirmBooking(ctx context.Context, input ConfirmBookingInput) (*model.Booking, error) {
+	requestLogger := s.logger.Ctx(ctx)
 	if input.EventID <= 0 || input.UserID <= 0 {
+		requestLogger.Warnw("booking confirmation rejected due to invalid input", "event_id", input.EventID, "user_id", input.UserID)
 		return nil, ErrInvalidInput
 	}
 
@@ -214,8 +248,71 @@ func (s *eventService) ConfirmBooking(ctx context.Context, input ConfirmBookingI
 		return ErrBookingNotFound
 	})
 	if err != nil {
+		requestLogger.Warnw("booking confirmation failed", "event_id", input.EventID, "user_id", input.UserID, "error", err)
 		return nil, err
 	}
 
+	requestLogger.Infow("booking confirmed", "event_id", input.EventID, "user_id", input.UserID, "booking_id", confirmedBooking.ID)
+	s.notifyBookingConfirmed(ctx, input.UserID, input.EventID, confirmedBooking)
 	return confirmedBooking, nil
+}
+
+func (s *eventService) notifyBookingCreated(ctx context.Context, userID int64, eventTitle string, booking *model.Booking) {
+	if s.notifier == nil {
+		return
+	}
+
+	user, err := s.userRepository.GetByID(ctx, userID)
+	if err != nil {
+		s.logger.Ctx(ctx).Warnw("failed to load user for booking notification", "user_id", userID, "error", err)
+		return
+	}
+
+	statusText := string(booking.Status)
+	message := fmt.Sprintf(
+		"Your booking for '%s' has been created. Booking #%d is currently %s and expires at %s UTC.",
+		eventTitle,
+		booking.ID,
+		statusText,
+		booking.ExpiresAt.UTC().Format(time.RFC3339),
+	)
+
+	s.sendBookingNotifications(ctx, user.ID, user.Email, message)
+}
+
+func (s *eventService) notifyBookingConfirmed(ctx context.Context, userID, eventID int64, booking *model.Booking) {
+	if s.notifier == nil {
+		return
+	}
+
+	user, err := s.userRepository.GetByID(ctx, userID)
+	if err != nil {
+		s.logger.Ctx(ctx).Warnw("failed to load user for booking confirmation notification", "user_id", userID, "error", err)
+		return
+	}
+
+	event, err := s.eventRepository.GetByID(ctx, eventID)
+	if err != nil {
+		s.logger.Ctx(ctx).Warnw("failed to load event for booking confirmation notification", "event_id", eventID, "error", err)
+		return
+	}
+
+	message := fmt.Sprintf(
+		"Your booking for '%s' is confirmed. Booking #%d is confirmed and the event starts at %s UTC.",
+		event.Title,
+		booking.ID,
+		event.StartAt.UTC().Format(time.RFC3339),
+	)
+
+	s.sendBookingNotifications(ctx, user.ID, user.Email, message)
+}
+
+func (s *eventService) sendBookingNotifications(ctx context.Context, userID int64, email, message string) {
+	if err := s.notifier.ScheduleEmail(ctx, email, message, time.Now().UTC()); err != nil {
+		s.logger.Ctx(ctx).Warnw("failed to schedule email notification", "user_id", userID, "error", err)
+	}
+
+	if err := s.notifier.ScheduleTelegram(ctx, userID, message, time.Now().UTC()); err != nil {
+		s.logger.Ctx(ctx).Warnw("failed to schedule telegram notification", "user_id", userID, "error", err)
+	}
 }

@@ -4,16 +4,18 @@ import (
 	"context"
 
 	"eventbooker/internal/domain/model"
+	"eventbooker/internal/logging"
 	"eventbooker/internal/repository"
 	pgxdriver "github.com/wb-go/wbf/dbpg/pgx-driver"
 )
 
 type EventRepository struct {
-	db *pgxdriver.Postgres
+	logger *logging.EventBookerLogger
+	db     *pgxdriver.Postgres
 }
 
-func NewEventRepository(db *pgxdriver.Postgres) repository.EventRepository {
-	return &EventRepository{db: db}
+func NewEventRepository(logger *logging.EventBookerLogger, db *pgxdriver.Postgres) repository.EventRepository {
+	return &EventRepository{logger: logger, db: db}
 }
 
 func (r *EventRepository) Create(ctx context.Context, event *model.Event) error {
@@ -33,6 +35,7 @@ func (r *EventRepository) Create(ctx context.Context, event *model.Event) error 
 		event.RequiresPayment,
 	).Scan(&event.ID, &event.CreatedAt)
 	if err != nil {
+		r.logger.Ctx(ctx).Errorw("failed to create event in postgres", "title", event.Title, "error", err)
 		return err
 	}
 
@@ -46,7 +49,13 @@ func (r *EventRepository) GetByID(ctx context.Context, id int64) (*model.Event, 
 		WHERE id = $1
 	`
 
-	return scanEvent(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, id))
+	event, err := scanEvent(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, id))
+	if err != nil {
+		r.logger.Ctx(ctx).Debugw("failed to get event by id from postgres", "event_id", id, "error", err)
+		return nil, err
+	}
+
+	return event, nil
 }
 
 func (r *EventRepository) List(ctx context.Context) ([]*model.Event, error) {
@@ -58,6 +67,7 @@ func (r *EventRepository) List(ctx context.Context) ([]*model.Event, error) {
 
 	rows, err := getQueryExecuter(ctx, r.db).Query(ctx, query)
 	if err != nil {
+		r.logger.Ctx(ctx).Errorw("failed to list events from postgres", "error", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -66,12 +76,14 @@ func (r *EventRepository) List(ctx context.Context) ([]*model.Event, error) {
 	for rows.Next() {
 		event, scanErr := scanEvent(rows)
 		if scanErr != nil {
+			r.logger.Ctx(ctx).Errorw("failed to scan event row from postgres", "error", scanErr)
 			return nil, scanErr
 		}
 		events = append(events, event)
 	}
 
 	if err = rows.Err(); err != nil {
+		r.logger.Ctx(ctx).Errorw("failed while iterating event rows from postgres", "error", err)
 		return nil, err
 	}
 
@@ -86,5 +98,11 @@ func (r *EventRepository) LockByIDForUpdate(ctx context.Context, id int64) (*mod
 		FOR UPDATE
 	`
 
-	return scanEvent(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, id))
+	event, err := scanEvent(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, id))
+	if err != nil {
+		r.logger.Ctx(ctx).Debugw("failed to lock event by id in postgres", "event_id", id, "error", err)
+		return nil, err
+	}
+
+	return event, nil
 }

@@ -4,16 +4,18 @@ import (
 	"context"
 
 	"eventbooker/internal/domain/model"
+	"eventbooker/internal/logging"
 	"eventbooker/internal/repository"
 	pgxdriver "github.com/wb-go/wbf/dbpg/pgx-driver"
 )
 
 type UserRepository struct {
-	db *pgxdriver.Postgres
+	logger *logging.EventBookerLogger
+	db     *pgxdriver.Postgres
 }
 
-func NewUserRepository(db *pgxdriver.Postgres) repository.UserRepository {
-	return &UserRepository{db: db}
+func NewUserRepository(logger *logging.EventBookerLogger, db *pgxdriver.Postgres) repository.UserRepository {
+	return &UserRepository{logger: logger, db: db}
 }
 
 func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
@@ -25,6 +27,7 @@ func (r *UserRepository) Create(ctx context.Context, user *model.User) error {
 
 	err := getQueryExecuter(ctx, r.db).QueryRow(ctx, query, user.Email, user.Name, user.PasswordHash, user.Role).Scan(&user.ID, &user.CreatedAt)
 	if err != nil {
+		r.logger.Ctx(ctx).Errorw("failed to create user in postgres", "email", user.Email, "error", err)
 		return err
 	}
 
@@ -38,7 +41,13 @@ func (r *UserRepository) GetByID(ctx context.Context, id int64) (*model.User, er
 		WHERE id = $1
 	`
 
-	return scanUser(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, id))
+	user, err := scanUser(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, id))
+	if err != nil {
+		r.logger.Ctx(ctx).Debugw("failed to get user by id from postgres", "user_id", id, "error", err)
+		return nil, err
+	}
+
+	return user, nil
 }
 
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
@@ -48,5 +57,11 @@ func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.U
 		WHERE email = $1
 	`
 
-	return scanUser(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, email))
+	user, err := scanUser(getQueryExecuter(ctx, r.db).QueryRow(ctx, query, email))
+	if err != nil {
+		r.logger.Ctx(ctx).Debugw("failed to get user by email from postgres", "email", email, "error", err)
+		return nil, err
+	}
+
+	return user, nil
 }

@@ -8,10 +8,13 @@ import (
 )
 
 // NewRouter wires event HTTP routes and returns configured ginext engine.
-func NewRouter(authHandler handler.AuthHandler, eventHandler handler.EventHandler, authMiddleware middleware.AuthMiddleware) *ginext.Engine {
+func NewRouter(authHandler handler.AuthHandler, eventHandler handler.EventHandler, frontendHandler handler.FrontendHandler, authMiddleware middleware.AuthMiddleware) *ginext.Engine {
 	router := ginext.New("")
+	router.LoadHTMLGlob("web/templates/**/*.html")
+	router.Static("/assets", "web/assets")
 	router.Use(ginext.Recovery())
 
+	router.GET("/", frontendHandler.Index)
 	router.POST("/auth/register", authHandler.Register)
 	router.POST("/auth/login", authHandler.Login)
 	router.POST("/auth/refresh", authHandler.Refresh)

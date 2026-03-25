@@ -41,11 +41,35 @@ function bindEvents() {
   elements.logoutButton.addEventListener("click", onLogout);
   elements.createEventForm.addEventListener("submit", onCreateEvent);
   elements.refreshEventsButton.addEventListener("click", () => loadEvents(true));
+  elements.eventsList.addEventListener("click", onEventCardAction);
+}
+
+function onEventCardAction(event) {
+  const actionButton = event.target.closest("button[data-action][data-event-id]");
+  if (!actionButton) {
+    return;
+  }
+
+  const eventID = actionButton.dataset.eventId;
+  if (!eventID) {
+    showToast("Invalid event id", true);
+    return;
+  }
+
+  if (actionButton.dataset.action === "details") {
+    loadEventDetails(eventID);
+    return;
+  }
+
+  if (actionButton.dataset.action === "book") {
+    bookEvent(eventID);
+  }
 }
 
 async function onRegister(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
+  const formElement = event.currentTarget;
+  const form = new FormData(formElement);
 
   try {
     await apiFetch("/auth/register", {
@@ -57,7 +81,7 @@ async function onRegister(event) {
       }),
     });
     showToast("Account created. You can sign in right away.");
-    event.currentTarget.reset();
+    formElement.reset();
   } catch (error) {
     showToast(error.message, true);
   }
@@ -103,7 +127,8 @@ async function onLogout() {
 
 async function onCreateEvent(event) {
   event.preventDefault();
-  const form = new FormData(event.currentTarget);
+  const formElement = event.currentTarget;
+  const form = new FormData(formElement);
 
   try {
     const localDate = form.get("start_at");
@@ -118,7 +143,7 @@ async function onCreateEvent(event) {
       }),
     });
 
-    event.currentTarget.reset();
+    formElement.reset();
     showToast("Event created.");
     await loadEvents();
   } catch (error) {
@@ -225,16 +250,6 @@ function renderEvents() {
     `;
   }).join("");
 
-  elements.eventsList.querySelectorAll("button").forEach((button) => {
-    button.addEventListener("click", () => {
-      const eventID = button.dataset.eventId;
-      if (button.dataset.action === "details") {
-        loadEventDetails(eventID);
-        return;
-      }
-      bookEvent(eventID);
-    });
-  });
 }
 
 function renderEventDetails() {

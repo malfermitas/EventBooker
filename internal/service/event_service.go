@@ -10,6 +10,7 @@ import (
 	"eventbooker/internal/domain/model"
 	"eventbooker/internal/logging"
 	"eventbooker/internal/repository"
+
 	"github.com/jackc/pgx/v5"
 )
 
@@ -42,8 +43,8 @@ func NewEventService(
 
 func (s *eventService) CreateEvent(ctx context.Context, input CreateEventInput) (*model.Event, error) {
 	requestLogger := s.logger.Ctx(ctx)
-	if strings.TrimSpace(input.Title) == "" || input.StartAt.IsZero() || input.Capacity <= 0 || input.BookingTTLSeconds <= 0 {
-		requestLogger.Warn("event creation rejected due to invalid input")
+	if strings.TrimSpace(input.Title) == "" || input.StartAt.Before(time.Now().UTC()) || input.Capacity <= 0 || input.BookingTTLSeconds <= 0 {
+		requestLogger.Warnw("event creation rejected due to invalid input", "title", input.Title, "start_at", input.StartAt, "capacity", input.Capacity)
 		return nil, ErrInvalidInput
 	}
 

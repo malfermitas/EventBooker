@@ -16,7 +16,7 @@ func NewFrontendHandler(telegramBotUsername string) FrontendHandler {
 }
 
 func (h frontendHandler) Index(ctx *ginext.Context) {
-	ctx.HTML(http.StatusOK, "app/index.html", gin.H{
+	ctx.HTML(http.StatusOK, "index.html", gin.H{
 		"TelegramBotUsername": h.telegramBotUsername,
 	})
 }

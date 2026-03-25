@@ -3,9 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      target: release
+      target: debug
     ports:
       - "8080:8080"
+      - "40000:40000"
     environment:
       CONFIG_PATH: /app/configs/config.yaml
       POSTGRES_DSN: postgres://postgres:postgres@db:5432/eventbooker?sslmode=disable

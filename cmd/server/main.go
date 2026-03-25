@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	appconfig "eventbooker/internal/config"
 	deliveryhttp "eventbooker/internal/delivery/http"
@@ -93,6 +94,8 @@ func run() error {
 	authMiddleware := transportmiddleware.NewAuthMiddleware(appLogger, authService)
 	router := deliveryhttp.NewRouter(authHandler, eventHandler, frontendHandler, authMiddleware)
 
+	bookingExpirationService := service.NewBookingExpirationService(appLogger, bookingRepository)
+
 	server := &stdhttp.Server{
 		Addr:         cfg.HTTP.Addr,
 		Handler:      router,
@@ -100,6 +103,9 @@ func run() error {
 		WriteTimeout: cfg.HTTP.WriteTimeout(),
 		IdleTimeout:  cfg.HTTP.IdleTimeout(),
 	}
+
+	appCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -110,14 +116,28 @@ func run() error {
 		}
 	}()
 
-	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		appLogger.Info("starting booking expiration worker")
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if _, expErr := bookingExpirationService.ExpirePendingBookings(appCtx, time.Now().UTC(), 100); expErr != nil {
+					appLogger.Errorw("failed to expire pending bookings", "error", expErr)
+				}
+			case <-appCtx.Done():
+				appLogger.Info("stopping booking expiration worker")
+				return
+			}
+		}
+	}()
 
 	select {
 	case serveErr := <-errCh:
 		return serveErr
-	case sig := <-signalCh:
-		appLogger.Infow("shutdown signal received", "signal", sig.String())
+	case <-appCtx.Done():
+		appLogger.Info("shutdown signal received")
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.HTTP.ShutdownTimeout())

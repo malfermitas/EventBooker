@@ -8,20 +8,20 @@ import (
 )
 
 type RegisterInput struct {
-	Email    string
-	Name     string
-	Password string
+	Email    string `validate:"required,email,max=254"`
+	Name     string `validate:"required,min=2,max=100"`
+	Password string `validate:"required,min=8,max=72"`
 }
 
 type LoginInput struct {
-	Email     string
-	Password  string
+	Email     string `validate:"required,email,max=254"`
+	Password  string `validate:"required,min=1,max=72"`
 	UserAgent string
 	IPAddress string
 }
 
 type RefreshInput struct {
-	RefreshToken string
+	RefreshToken string `validate:"required"`
 	UserAgent    string
 	IPAddress    string
 }
@@ -58,21 +58,21 @@ type NotificationSender interface {
 }
 
 type CreateEventInput struct {
-	Title             string
-	StartAt           time.Time
-	Capacity          int
-	BookingTTLSeconds int
+	Title             string    `validate:"required,min=3,max=200"`
+	StartAt           time.Time `validate:"required,future_time"`
+	Capacity          int       `validate:"required,gte=1,lte=100000"`
+	BookingTTLSeconds int       `validate:"required,gte=1,lte=604800"`
 	RequiresPayment   bool
 }
 
 type BookEventInput struct {
-	EventID int64
-	UserID  int64
+	EventID int64 `validate:"required,gt=0"`
+	UserID  int64 `validate:"required,gt=0"`
 }
 
 type ConfirmBookingInput struct {
-	EventID int64
-	UserID  int64
+	EventID int64 `validate:"required,gt=0"`
+	UserID  int64 `validate:"required,gt=0"`
 }
 
 type EventDetails struct {

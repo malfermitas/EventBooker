@@ -43,17 +43,25 @@ func NewEventService(
 
 func (s *eventService) CreateEvent(ctx context.Context, input CreateEventInput) (*model.Event, error) {
 	requestLogger := s.logger.Ctx(ctx)
-	if strings.TrimSpace(input.Title) == "" || input.StartAt.Before(time.Now().UTC()) || input.Capacity <= 0 || input.BookingTTLSeconds <= 0 {
-		requestLogger.Warnw("event creation rejected due to invalid input", "title", input.Title, "start_at", input.StartAt, "capacity", input.Capacity)
-		return nil, ErrInvalidInput
-	}
-
-	event := &model.Event{
+	normalizedInput := CreateEventInput{
 		Title:             strings.TrimSpace(input.Title),
 		StartAt:           input.StartAt,
 		Capacity:          input.Capacity,
 		BookingTTLSeconds: input.BookingTTLSeconds,
 		RequiresPayment:   input.RequiresPayment,
+	}
+
+	if err := validateInput(normalizedInput); err != nil {
+		requestLogger.Warnw("event creation rejected due to invalid input", "title", normalizedInput.Title, "start_at", normalizedInput.StartAt, "capacity", normalizedInput.Capacity, "error", err)
+		return nil, err
+	}
+
+	event := &model.Event{
+		Title:             normalizedInput.Title,
+		StartAt:           normalizedInput.StartAt,
+		Capacity:          normalizedInput.Capacity,
+		BookingTTLSeconds: normalizedInput.BookingTTLSeconds,
+		RequiresPayment:   normalizedInput.RequiresPayment,
 	}
 
 	if err := s.eventRepository.Create(ctx, event); err != nil {
@@ -121,9 +129,9 @@ func (s *eventService) GetEventDetails(ctx context.Context, eventID int64) (*Eve
 
 func (s *eventService) BookEvent(ctx context.Context, input BookEventInput) (*model.Booking, error) {
 	requestLogger := s.logger.Ctx(ctx)
-	if input.EventID <= 0 || input.UserID <= 0 {
-		requestLogger.Warnw("event booking rejected due to invalid input", "event_id", input.EventID, "user_id", input.UserID)
-		return nil, ErrInvalidInput
+	if err := validateInput(input); err != nil {
+		requestLogger.Warnw("event booking rejected due to invalid input", "event_id", input.EventID, "user_id", input.UserID, "error", err)
+		return nil, err
 	}
 
 	var booking *model.Booking
@@ -198,9 +206,9 @@ func (s *eventService) BookEvent(ctx context.Context, input BookEventInput) (*mo
 
 func (s *eventService) ConfirmBooking(ctx context.Context, input ConfirmBookingInput) (*model.Booking, error) {
 	requestLogger := s.logger.Ctx(ctx)
-	if input.EventID <= 0 || input.UserID <= 0 {
-		requestLogger.Warnw("booking confirmation rejected due to invalid input", "event_id", input.EventID, "user_id", input.UserID)
-		return nil, ErrInvalidInput
+	if err := validateInput(input); err != nil {
+		requestLogger.Warnw("booking confirmation rejected due to invalid input", "event_id", input.EventID, "user_id", input.UserID, "error", err)
+		return nil, err
 	}
 
 	var confirmedBooking *model.Booking

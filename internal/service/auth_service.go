@@ -58,14 +58,21 @@ func NewAuthService(
 
 func (s *authService) Register(ctx context.Context, input RegisterInput) (*model.User, error) {
 	requestLogger := s.logger.Ctx(ctx)
-	email := strings.TrimSpace(strings.ToLower(input.Email))
-	name := strings.TrimSpace(input.Name)
-	if !isValidEmail(email) || name == "" || len(input.Password) < 8 {
-		requestLogger.Warnw("user registration rejected due to invalid input", "email", email)
-		return nil, ErrInvalidInput
+	normalizedInput := RegisterInput{
+		Email:    strings.TrimSpace(strings.ToLower(input.Email)),
+		Name:     strings.TrimSpace(input.Name),
+		Password: input.Password,
 	}
 
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err := validateInput(normalizedInput); err != nil {
+		requestLogger.Warnw("user registration rejected due to invalid input", "email", normalizedInput.Email, "error", err)
+		return nil, err
+	}
+
+	email := normalizedInput.Email
+	name := normalizedInput.Name
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(normalizedInput.Password), bcrypt.DefaultCost)
 	if err != nil {
 		requestLogger.Errorw("failed to hash user password", "email", email, "error", err)
 		return nil, err
@@ -94,13 +101,25 @@ func (s *authService) Register(ctx context.Context, input RegisterInput) (*model
 
 func (s *authService) Login(ctx context.Context, input LoginInput) (*LoginResult, string, error) {
 	requestLogger := s.logger.Ctx(ctx)
-	user, err := s.authenticateUser(ctx, input.Email, input.Password)
+	normalizedInput := LoginInput{
+		Email:     strings.TrimSpace(strings.ToLower(input.Email)),
+		Password:  input.Password,
+		UserAgent: input.UserAgent,
+		IPAddress: input.IPAddress,
+	}
+
+	if err := validateInput(normalizedInput); err != nil {
+		requestLogger.Warnw("user login rejected due to invalid input", "email", normalizedInput.Email, "error", err)
+		return nil, "", err
+	}
+
+	user, err := s.authenticateUser(ctx, normalizedInput.Email, normalizedInput.Password)
 	if err != nil {
 		requestLogger.Warnw("user login failed", "email", strings.TrimSpace(strings.ToLower(input.Email)), "error", err)
 		return nil, "", err
 	}
 
-	result, refreshToken, err := s.issueSession(ctx, user, input.UserAgent, input.IPAddress, nil)
+	result, refreshToken, err := s.issueSession(ctx, user, normalizedInput.UserAgent, normalizedInput.IPAddress, nil)
 	if err != nil {
 		requestLogger.Errorw("failed to issue login session", "user_id", user.ID, "error", err)
 		return nil, "", err
@@ -112,7 +131,13 @@ func (s *authService) Login(ctx context.Context, input LoginInput) (*LoginResult
 
 func (s *authService) Refresh(ctx context.Context, input RefreshInput) (*RefreshResult, string, error) {
 	requestLogger := s.logger.Ctx(ctx)
-	if strings.TrimSpace(input.RefreshToken) == "" {
+	normalizedInput := RefreshInput{
+		RefreshToken: strings.TrimSpace(input.RefreshToken),
+		UserAgent:    input.UserAgent,
+		IPAddress:    input.IPAddress,
+	}
+
+	if err := validateInput(normalizedInput); err != nil {
 		requestLogger.Warn("refresh rejected because token is empty")
 		return nil, "", ErrUnauthorized
 	}
@@ -120,7 +145,7 @@ func (s *authService) Refresh(ctx context.Context, input RefreshInput) (*Refresh
 	var result *RefreshResult
 	var rawRefreshToken string
 	err := s.txManager.WithinTx(ctx, func(txCtx context.Context) error {
-		hashedToken := hashRefreshToken(input.RefreshToken)
+		hashedToken := hashRefreshToken(normalizedInput.RefreshToken)
 		session, err := s.refreshTokenRepository.GetByTokenHash(txCtx, hashedToken)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -145,7 +170,7 @@ func (s *authService) Refresh(ctx context.Context, input RefreshInput) (*Refresh
 			return err
 		}
 
-		newResult, newRefreshToken, err := s.issueSession(txCtx, user, input.UserAgent, input.IPAddress, session)
+		newResult, newRefreshToken, err := s.issueSession(txCtx, user, normalizedInput.UserAgent, normalizedInput.IPAddress, session)
 		if err != nil {
 			return err
 		}
@@ -349,15 +374,6 @@ func hashRefreshToken(token string) string {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
-}
-
-func isValidEmail(email string) bool {
-	if len(email) < 3 || !strings.Contains(email, "@") {
-		return false
-	}
-
-	parts := strings.Split(email, "@")
-	return len(parts) == 2 && parts[0] != "" && strings.Contains(parts[1], ".")
 }
 
 func parseSubject(subject string) (int64, error) {
